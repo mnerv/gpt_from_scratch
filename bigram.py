@@ -83,6 +83,16 @@ class Head(nn.Module):
         out = wei @ v  # (B, T, T) @ (B, T, C) -> (B, T, C)
         return out
 
+class MulitHeadAttention(nn.Module):
+    """ multiple heads of self-attention in parallel"""
+
+    def __init__(self, num_heads, head_size) -> None:
+        super().__init__()
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+
+    def forward(self, x):
+        return torch.cat([h(x) for h in self.heads], dim=-1)
+
 # Simple bigram model
 class BigramLanguageModel(nn.Module):
     def __init__(self):
@@ -90,7 +100,8 @@ class BigramLanguageModel(nn.Module):
         # Each token directly reads off the logits for the next token from a lookup table
         self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
         self.position_embedding_table = nn.Embedding(block_size, n_embed)
-        self.sa_head = Head(n_embed)  # self-attention head
+        # self.sa_head = Head(n_embed)  # self-attention head
+        self.sa_heads = MulitHeadAttention(4, n_embed // 4)  # i.e 4 heads of self-attentionA
         self.ln_head = nn.Linear(n_embed, vocab_size)  # Language model head
 
     def forward(self, idx, targets = None):
@@ -102,7 +113,7 @@ class BigramLanguageModel(nn.Module):
                                                    # Arrange it to (B, T, C) to logits which is the score for the next character in the sequence
         pos_emb = self.position_embedding_table(torch.arange(T, device=device))  # (T, C)
         x = tok_emb + pos_emb  # (B, T, C)
-        x = self.sa_head(x)  # apply one head of self-attention. (B, T, C)
+        x = self.sa_heads(x)  # apply one head of self-attention. (B, T, C)
         logits = self.ln_head(x)  # (B, T, C)  C and tok_emb C is not the same so (B, T, vocab_size)
 
         if targets is None:
