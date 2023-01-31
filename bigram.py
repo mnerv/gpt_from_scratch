@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import time
 
 # hyperparameters
 batch_size = 32  # how may independent sequences will we process in parallel
@@ -89,9 +90,12 @@ class MulitHeadAttention(nn.Module):
     def __init__(self, num_heads, head_size) -> None:
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.proj = nn.Linear(n_embed, n_embed)
 
     def forward(self, x):
-        return torch.cat([h(x) for h in self.heads], dim=-1)
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+        out = self.proj(out)
+        return out
 
 class FeedForward(nn.Module):
     """ a simple linear layer followed by a non-linearity """
@@ -99,12 +103,30 @@ class FeedForward(nn.Module):
     def __init__(self, n_embd) -> None:
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embd, n_embd),
+            nn.Linear(n_embd, 4 * n_embd),  # Followed by a linear layer with 4 times the embedding dimension
             nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd),  # Projection layer going back to the embedding dimension
         )
 
     def forward(self, x):
         return self.net(x)
+
+class Block(nn.Module):
+    """ Transformer block: communication followed by computation """
+
+    def __init__(self, n_embd, n_head) -> None:
+        # n_embd: embedding dimension, n_head: the number of heads we'd like
+        super().__init__()
+        head_size = n_embd // n_head
+        self.sa = MulitHeadAttention(n_head, head_size)
+        self.ffwd = FeedForward(n_embd)
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
+
+    def forward(self, x):
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
+        return x
 
 # Simple bigram model
 class BigramLanguageModel(nn.Module):
@@ -114,8 +136,12 @@ class BigramLanguageModel(nn.Module):
         self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
         self.position_embedding_table = nn.Embedding(block_size, n_embed)
         # self.sa_head = Head(n_embed)  # self-attention head
-        self.sa_heads = MulitHeadAttention(4, n_embed // 4)  # i.e 4 heads of self-attentionA
-        self.ffwd = FeedForward(n_embed)  # feed-forward layer
+        self.blocks = nn.Sequential(
+            Block(n_embed, n_head = 4),
+            Block(n_embed, n_head = 4),
+            Block(n_embed, n_head = 4),
+            nn.LayerNorm(n_embed),  # Layer normalization
+        )
         self.ln_head = nn.Linear(n_embed, vocab_size)  # Language model head
 
     def forward(self, idx, targets = None):
@@ -127,8 +153,7 @@ class BigramLanguageModel(nn.Module):
                                                    # Arrange it to (B, T, C) to logits which is the score for the next character in the sequence
         pos_emb = self.position_embedding_table(torch.arange(T, device=device))  # (T, C)
         x = tok_emb + pos_emb  # (B, T, C)
-        x = self.sa_heads(x)  # apply one head of self-attention. (B, T, C)
-        x = self.ffwd(x)  # (B, T, C)
+        x = self.blocks(x)  # (B, T, C)
         logits = self.ln_head(x)  # (B, T, C)  C and tok_emb C is not the same so (B, T, vocab_size)
 
         if targets is None:
@@ -167,6 +192,7 @@ print(sum(p.numel() for p in m.parameters())/1e6, 'M parameters')
 # create a PyTorch optimizer
 optimizer = torch.optim.AdamW(m.parameters(), lr=learning_rate)
 
+t = time.process_time()
 for iter in range(max_iters):
     # every once in a while evaluate the loss on train and val sets
     if iter % eval_interval == 0:
@@ -181,6 +207,9 @@ for iter in range(max_iters):
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     optimizer.step()
+
+elapsed_time = time.process_time() - t
+print(elapsed_time)
 
 # generate from the model
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
