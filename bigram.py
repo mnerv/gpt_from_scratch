@@ -10,6 +10,7 @@ eval_interval = 300
 learning_rate = 1e-2
 device     = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
+n_embed = 32  # number of embedded dimensions
 # --------------------------------
 
 torch.manual_seed(1337)
@@ -61,16 +62,24 @@ def estimate_loss():
 
 # Simple bigram model
 class BigramLanguageModel(nn.Module):
-    def __init__(self, vocab_size):
+    def __init__(self):
         super().__init__()
         # Each token directly reads off the logits for the next token from a lookup table
-        self.token_embedding_table = nn.Embedding(vocab_size, vocab_size)
+        self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
+        self.position_embedding_table = nn.Embedding(block_size, n_embed)
+        self.ln_head = nn.Linear(n_embed, vocab_size)  # Language model head
 
     def forward(self, idx, targets = None):
+        B, T = idx.shape
+
         # idx and targets are both (B, T) tensor for integers
-        logits = self.token_embedding_table(idx)  # (B, T, C), batch by time by channel tensor
-                                                  # In our case batch is 4, time is 8 and chanel is vocab size or 65
-                                                  # Arrange it to (B, T, C) to logits which is the score for the next character in the sequence
+        tok_emb = self.token_embedding_table(idx)  # (B, T, C), batch by time by channel tensor
+                                                   # In our case batch is 4, time is 8 and chanel is vocab size or 65
+                                                   # Arrange it to (B, T, C) to logits which is the score for the next character in the sequence
+        pos_emb = self.position_embedding_table(torch.arrange(T, device=device))  # (T, C)
+        x = tok_emb + pos_emb  # (B, T, C)
+        logits = self.ln_head(x)  # (B, T, C)  C and tok_emb C is not the same so (B, T, vocab_size)
+
         if targets is None:
             loss = None
         else:
@@ -97,7 +106,7 @@ class BigramLanguageModel(nn.Module):
         return idx
 
 # create model and move it to the device
-model = BigramLanguageModel(vocab_size)
+model = BigramLanguageModel()
 m = model.to(device)
 
 # create a PyTorch optimizer
