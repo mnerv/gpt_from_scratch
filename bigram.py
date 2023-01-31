@@ -93,6 +93,19 @@ class MulitHeadAttention(nn.Module):
     def forward(self, x):
         return torch.cat([h(x) for h in self.heads], dim=-1)
 
+class FeedForward(nn.Module):
+    """ a simple linear layer followed by a non-linearity """
+
+    def __init__(self, n_embd) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, n_embd),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
 # Simple bigram model
 class BigramLanguageModel(nn.Module):
     def __init__(self):
@@ -102,6 +115,7 @@ class BigramLanguageModel(nn.Module):
         self.position_embedding_table = nn.Embedding(block_size, n_embed)
         # self.sa_head = Head(n_embed)  # self-attention head
         self.sa_heads = MulitHeadAttention(4, n_embed // 4)  # i.e 4 heads of self-attentionA
+        self.ffwd = FeedForward(n_embed)  # feed-forward layer
         self.ln_head = nn.Linear(n_embed, vocab_size)  # Language model head
 
     def forward(self, idx, targets = None):
@@ -114,6 +128,7 @@ class BigramLanguageModel(nn.Module):
         pos_emb = self.position_embedding_table(torch.arange(T, device=device))  # (T, C)
         x = tok_emb + pos_emb  # (B, T, C)
         x = self.sa_heads(x)  # apply one head of self-attention. (B, T, C)
+        x = self.ffwd(x)  # (B, T, C)
         logits = self.ln_head(x)  # (B, T, C)  C and tok_emb C is not the same so (B, T, vocab_size)
 
         if targets is None:
